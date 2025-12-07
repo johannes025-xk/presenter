@@ -88,3 +88,11 @@ Use the `\note{}` command with `show notes on second screen` option.
 - Tkinter (included with Python on most Linux distributions)
 - PyMuPDF (`pymupdf`)
 
+## License
+
+This project is licensed under the GNU Affero General Public License v3 (AGPL-3.0).
+
+This project incorporates **PyMuPDF**, which is available under the GNU Affero General Public License v3. PyMuPDF is maintained by Artifex Software, Inc. For more information, visit: https://pymupdf.io/
+
+See the [LICENSE](LICENSE) file for the full license text.
+

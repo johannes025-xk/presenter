@@ -5,7 +5,32 @@ PDF Presenter - Synchronized dual-window PDF viewer for presentations.
 Displays odd pages (1, 3, 5...) on the audience window and even pages (2, 4, 6...)
 on the presenter window. Navigation in either window keeps both in sync.
 
-Usage: python presenter.py presentation.pdf
+Usage: python presenter.py presentation.pdf [config_file]
+
+The optional config_file contains a comma-separated list of page numbers that
+should be shown on the audience screen. All other pages become presenter notes.
+Example config: 1,4,8 means slides 1,4,8 are for audience; pages 2,3 are notes
+for slide 1, pages 5,6,7 are notes for slide 4, etc.
+
+Copyright (C) 2025 Johannes Schaefer
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+This program incorporates PyMuPDF, which is available under the GNU Affero
+General Public License v3. PyMuPDF is maintained by Artifex Software, Inc.
+Copyright (C) Artifex Software, Inc.
+For more information, visit: https://pymupdf.io/
 """
 
 import sys
@@ -18,6 +43,44 @@ try:
 except ImportError:
     print("Error: PyMuPDF not installed. Run: pip install pymupdf")
     sys.exit(1)
+
+
+def parse_config_file(config_path):
+    """
+    Parse a config file containing comma-separated page numbers for audience slides.
+    
+    Args:
+        config_path: Path to the config file
+        
+    Returns:
+        List of 1-indexed page numbers for audience slides, sorted ascending
+    """
+    path = Path(config_path)
+    if not path.exists():
+        print(f"Error: Config file not found: {config_path}")
+        sys.exit(1)
+    
+    try:
+        content = path.read_text().strip()
+        # Parse comma-separated integers
+        pages = [int(p.strip()) for p in content.split(',') if p.strip()]
+        
+        if not pages:
+            print("Error: Config file is empty or contains no valid page numbers")
+            sys.exit(1)
+        
+        # Validate all pages are positive
+        if any(p < 1 for p in pages):
+            print("Error: Page numbers must be positive integers (1-indexed)")
+            sys.exit(1)
+        
+        # Sort and remove duplicates
+        pages = sorted(set(pages))
+        return pages
+        
+    except ValueError as e:
+        print(f"Error: Config file must contain comma-separated integers: {e}")
+        sys.exit(1)
 
 
 class PDFWindow:
@@ -118,7 +181,15 @@ class PDFWindow:
 class PDFPresenter:
     """Main presenter application managing two synchronized PDF windows."""
 
-    def __init__(self, pdf_path):
+    def __init__(self, pdf_path, audience_pages=None):
+        """
+        Initialize the presenter.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            audience_pages: Optional list of 1-indexed page numbers for audience slides.
+                           If None, uses default behavior (odd pages for audience).
+        """
         self.pdf_path = Path(pdf_path)
         if not self.pdf_path.exists():
             print(f"Error: File not found: {pdf_path}")
@@ -131,9 +202,11 @@ class PDFPresenter:
             print(f"Error opening PDF: {e}")
             sys.exit(1)
 
-        # Calculate number of slides (pairs of pages)
         self.total_pages = len(self.doc)
-        self.num_slides = (self.total_pages + 1) // 2  # Round up for odd page count
+        
+        # Build slide mapping based on config or default behavior
+        self.slides = self._build_slide_mapping(audience_pages)
+        self.num_slides = len(self.slides)
         self.current_slide = 0  # 0-indexed
 
         if self.total_pages < 2:
@@ -173,6 +246,47 @@ class PDFPresenter:
 
         # Initial display
         self.root.after(100, self.update_display)
+    
+    def _build_slide_mapping(self, audience_pages):
+        """
+        Build a mapping from slide index to (audience_page, presenter_pages).
+        
+        Args:
+            audience_pages: List of 1-indexed page numbers for audience slides,
+                           or None for default behavior.
+        
+        Returns:
+            List of tuples: [(audience_page_0idx, [presenter_pages_0idx]), ...]
+        """
+        if audience_pages is None:
+            # Default behavior: odd pages (1,3,5...) for audience, even (2,4,6...) for presenter
+            slides = []
+            for i in range(0, self.total_pages, 2):
+                audience_page = i  # 0-indexed
+                presenter_pages = [i + 1] if i + 1 < self.total_pages else []
+                slides.append((audience_page, presenter_pages))
+            return slides
+        
+        # Custom audience pages from config
+        # Convert to 0-indexed and filter out pages beyond PDF length
+        audience_pages_0idx = [p - 1 for p in audience_pages if p <= self.total_pages]
+        
+        if not audience_pages_0idx:
+            print("Error: No valid audience pages found within PDF page range")
+            sys.exit(1)
+        
+        slides = []
+        for i, audience_page in enumerate(audience_pages_0idx):
+            # Presenter pages are all pages between this audience page and the next
+            if i + 1 < len(audience_pages_0idx):
+                next_audience = audience_pages_0idx[i + 1]
+            else:
+                next_audience = self.total_pages
+            
+            presenter_pages = list(range(audience_page + 1, next_audience))
+            slides.append((audience_page, presenter_pages))
+        
+        return slides
 
     def toggle_blank(self):
         """Toggle blank screen for audience window."""
@@ -300,11 +414,8 @@ class PDFPresenter:
 
     def update_display(self):
         """Update both windows with current slide."""
-        # Audience sees odd pages (0, 2, 4... in 0-indexed = pages 1, 3, 5...)
-        audience_page = self.current_slide * 2
-
-        # Presenter sees even pages (1, 3, 5... in 0-indexed = pages 2, 4, 6...)
-        presenter_page = self.current_slide * 2 + 1
+        # Get page mapping for current slide
+        audience_page, presenter_pages = self.slides[self.current_slide]
 
         # Render and display audience page
         aw = self.audience_window.canvas.winfo_width()
@@ -318,18 +429,24 @@ class PDFPresenter:
                 audience_pixmap = self.render_page(audience_page, aw, ah)
                 self.audience_window.display_page(audience_pixmap)
 
-        # Render and display presenter page (always visible, even when blanked)
+        # Render and display first presenter page (always visible, even when blanked)
+        # If multiple presenter pages exist, show the first one
         pw = self.presenter_window.canvas.winfo_width()
         ph = self.presenter_window.canvas.winfo_height()
         if pw > 10 and ph > 10:
-            presenter_pixmap = self.render_page(presenter_page, pw, ph)
-            self.presenter_window.display_page(presenter_pixmap)
+            presenter_page = presenter_pages[0] if presenter_pages else None
+            if presenter_page is not None:
+                presenter_pixmap = self.render_page(presenter_page, pw, ph)
+                self.presenter_window.display_page(presenter_pixmap)
+            else:
+                self.presenter_window.display_page(None)
 
         # Update window titles
         slide_info = f"Slide {self.current_slide + 1}/{self.num_slides}"
+        notes_info = f" ({len(presenter_pages)} notes)" if len(presenter_pages) > 1 else ""
         blank_indicator = " [BLANKED]" if self.is_blanked else ""
         self.audience_window.set_title(f"Audience View - {slide_info}{blank_indicator}")
-        self.presenter_window.set_title(f"Presenter Notes - {slide_info}{blank_indicator}")
+        self.presenter_window.set_title(f"Presenter Notes - {slide_info}{notes_info}{blank_indicator}")
 
     def quit(self):
         """Clean up and exit."""
@@ -340,6 +457,15 @@ class PDFPresenter:
         """Start the application."""
         print(f"Loaded: {self.pdf_path.name}")
         print(f"Total pages: {self.total_pages}, Slides: {self.num_slides}")
+        
+        # Show slide mapping summary
+        print("\nSlide mapping:")
+        for i, (aud_page, pres_pages) in enumerate(self.slides[:5]):  # Show first 5
+            pres_str = f"notes: {[p+1 for p in pres_pages]}" if pres_pages else "no notes"
+            print(f"  Slide {i+1}: page {aud_page+1} ({pres_str})")
+        if len(self.slides) > 5:
+            print(f"  ... and {len(self.slides) - 5} more slides")
+        
         print("\nControls:")
         print("  Right/Space/PgDn - Next slide")
         print("  Left/PgUp        - Previous slide")
@@ -356,15 +482,29 @@ class PDFPresenter:
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python presenter.py <pdf_file>")
-        print("\nThe PDF should have interleaved pages:")
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print("Usage: python presenter.py <pdf_file> [config_file]")
+        print("\nDefault behavior (no config file):")
         print("  - Odd pages (1, 3, 5...): Audience slides")
         print("  - Even pages (2, 4, 6...): Presenter notes")
+        print("\nWith config file:")
+        print("  The config file should contain a comma-separated list of page numbers")
+        print("  that are meant for the audience screen. All other pages become presenter notes.")
+        print("\n  Example config content: 1,4,8")
+        print("  - Page 1 is audience slide 1, pages 2-3 are its presenter notes")
+        print("  - Page 4 is audience slide 2, pages 5-7 are its presenter notes")
+        print("  - Page 8 is audience slide 3, remaining pages are its notes")
         sys.exit(1)
 
     pdf_path = sys.argv[1]
-    presenter = PDFPresenter(pdf_path)
+    
+    audience_pages = None
+    if len(sys.argv) == 3:
+        config_path = sys.argv[2]
+        audience_pages = parse_config_file(config_path)
+        print(f"Config loaded: audience pages are {audience_pages}")
+    
+    presenter = PDFPresenter(pdf_path, audience_pages)
     presenter.run()
 
 
