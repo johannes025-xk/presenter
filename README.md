@@ -90,9 +90,21 @@ Use the `\note{}` command with `show notes on second screen` option.
 
 ## License
 
+Copyright (C) 2025 Johannes Schaefer
+
 This project is licensed under the GNU Affero General Public License v3 (AGPL-3.0).
 
-This project incorporates **PyMuPDF**, which is available under the GNU Affero General Public License v3. PyMuPDF is maintained by Artifex Software, Inc. For more information, visit: https://pymupdf.io/
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+### Third-Party Components
+
+This project incorporates **PyMuPDF**, which is available under the GNU Affero General Public License v3. PyMuPDF is maintained by Artifex Software, Inc. Copyright (C) Artifex Software, Inc. For more information, visit: https://pymupdf.io/
+
+### Source Code
+
+The complete source code for this project is available in this repository. Under the terms of the AGPL v3, if you distribute or make this software available over a network, you must provide access to the corresponding source code.
 
 See the [LICENSE](LICENSE) file for the full license text.
 
