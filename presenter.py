@@ -98,17 +98,11 @@ class PDFWindow:
         # Canvas for PDF rendering
         self.canvas = tk.Canvas(self.window, bg="black", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Make canvas focusable so it can receive keyboard events
+        self.canvas.focus_set()
 
-        # Bind navigation events to the window
-        self.window.bind("<Right>", lambda e: self.on_navigate("next"))
-        self.window.bind("<space>", lambda e: self.on_navigate("next"))
-        self.window.bind("<Next>", lambda e: self.on_navigate("next"))      # Page Down
-        self.window.bind("<Left>", lambda e: self.on_navigate("prev"))
-        self.window.bind("<Prior>", lambda e: self.on_navigate("prev"))     # Page Up
-        self.window.bind("<Home>", lambda e: self.on_navigate("first"))
-        self.window.bind("<End>", lambda e: self.on_navigate("last"))
-        self.window.bind("<F11>", lambda e: self.toggle_fullscreen())
-        self.window.bind("<Escape>", lambda e: self.exit_fullscreen())
+        # Only bind Configure event here - all key bindings are handled in PDFPresenter
         self.window.bind("<Configure>", self.on_resize)
 
     def toggle_fullscreen(self):
@@ -212,28 +206,51 @@ class PDFPresenter:
         self.audience_window.window.geometry("800x600+50+50")
         self.presenter_window.window.geometry("800x600+900+50")
 
-        # Handle window close
-        self.audience_window.window.protocol("WM_DELETE_WINDOW", self.quit)
-        self.presenter_window.window.protocol("WM_DELETE_WINDOW", self.quit)
+        # Handle window close - show confirmation dialog
+        self.audience_window.window.protocol("WM_DELETE_WINDOW", self.confirm_quit)
+        self.presenter_window.window.protocol("WM_DELETE_WINDOW", self.confirm_quit)
 
         # Blank screen state
         self.is_blanked = False
 
-        # Use bind_all on root to catch all key events regardless of focus
-        # This is more reliable than per-widget bindings
-        self.root.bind_all("<Key-b>", lambda e: self.toggle_blank())
-        self.root.bind_all("<Key-B>", lambda e: self.toggle_blank())
-        self.root.bind_all("<Key-h>", lambda e: self.show_help())
-        self.root.bind_all("<Key-H>", lambda e: self.show_help())
-        self.root.bind_all("<Key-x>", lambda e: self.quit())
-        self.root.bind_all("<Key-X>", lambda e: self.quit())
+        # Bind keys to both windows and canvases for reliability
+        # Navigation keys
+        widgets_to_bind = [
+            self.audience_window.window, self.audience_window.canvas,
+            self.presenter_window.window, self.presenter_window.canvas
+        ]
         
-        # Slide jump: digit input and Return key
+        for widget in widgets_to_bind:
+            widget.bind("<Right>", lambda e: self.navigate("next"))
+            widget.bind("<Left>", lambda e: self.navigate("prev"))
+            widget.bind("<space>", lambda e: self.navigate("next"))
+            widget.bind("<Next>", lambda e: self.navigate("next"))  # Page Down
+            widget.bind("<Prior>", lambda e: self.navigate("prev"))  # Page Up
+            widget.bind("<Home>", lambda e: self.navigate("first"))
+            widget.bind("<End>", lambda e: self.navigate("last"))
+            widget.bind("<F11>", lambda e: self.audience_window.toggle_fullscreen())
+            widget.bind("<Escape>", lambda e: self.audience_window.exit_fullscreen())
+            
+            # Letter keys
+            widget.bind("<Key-b>", lambda e: self.toggle_blank())
+            widget.bind("<Key-B>", lambda e: self.toggle_blank())
+            widget.bind("<Key-h>", lambda e: self.show_help())
+            widget.bind("<Key-H>", lambda e: self.show_help())
+            widget.bind("<Key-x>", lambda e: self.confirm_quit())
+            widget.bind("<Key-X>", lambda e: self.confirm_quit())
+            
+            # Slide jump: digit input and Return key
+            for digit in "0123456789":
+                widget.bind(f"<Key-{digit}>", self._on_digit)
+            widget.bind("<Return>", self._on_return)
+            widget.bind("<KP_Enter>", self._on_return)
+        
+        # Slide jump buffer
         self.page_input = ""
-        for digit in "0123456789":
-            self.root.bind_all(f"<Key-{digit}>", self._on_digit)
-        self.root.bind_all("<Return>", self._on_return)
-        self.root.bind_all("<KP_Enter>", self._on_return)
+        
+        # Ensure windows can receive focus
+        self.audience_window.window.focus_set()
+        self.presenter_window.window.focus_set()
 
         # Handle Ctrl+C (SIGINT) to exit gracefully
         # Use a more direct approach for immediate exit
@@ -254,6 +271,9 @@ class PDFPresenter:
 
         # Help window reference
         self.help_window = None
+        
+        # Quit confirmation dialog reference
+        self.quit_dialog = None
 
         # Initial display
         self.root.after(100, self.update_display)
@@ -510,8 +530,146 @@ class PDFPresenter:
         self.audience_window.set_title(f"Audience View - {slide_info}{blank_indicator}")
         self.presenter_window.set_title(f"Presenter Notes - {slide_info}{notes_info}{blank_indicator}")
 
+    def confirm_quit(self):
+        """Show confirmation dialog before quitting."""
+        # If dialog already exists, bring it to front
+        if self.quit_dialog is not None:
+            try:
+                if self.quit_dialog.winfo_exists():
+                    self.quit_dialog.lift()
+                    self.quit_dialog.focus_set()
+                    return
+            except:
+                # Dialog was destroyed, reset reference
+                self.quit_dialog = None
+
+        # Create confirmation dialog
+        try:
+            self.quit_dialog = tk.Toplevel(self.root)
+            self.quit_dialog.title("Quit Application")
+            self.quit_dialog.geometry("400x150")
+            self.quit_dialog.resizable(False, False)
+            
+            # Center the dialog on screen
+            self.quit_dialog.update_idletasks()
+            x = (self.quit_dialog.winfo_screenwidth() // 2) - (400 // 2)
+            y = (self.quit_dialog.winfo_screenheight() // 2) - (150 // 2)
+            self.quit_dialog.geometry(f"400x150+{x}+{y}")
+
+            # Make it stay on top
+            self.quit_dialog.attributes("-topmost", True)
+            self.quit_dialog.transient(self.root)
+            
+            # Don't use grab_set() as it blocks all keyboard input
+            # Instead, we'll rely on the dialog being on top and having focus
+            # This prevents the "keyboard frozen" issue
+
+            # Create frame with padding
+            frame = tk.Frame(self.quit_dialog, bg="#2b2b2b", padx=20, pady=15)
+            frame.pack(fill=tk.BOTH, expand=True)
+
+            # Question label
+            question_label = tk.Label(
+                frame,
+                text="Are you sure you want to quit?",
+                font=("sans-serif", 12, "bold"),
+                bg="#2b2b2b",
+                fg="#e0e0e0"
+            )
+            question_label.pack(pady=(0, 15))
+
+            # Button frame
+            button_frame = tk.Frame(frame, bg="#2b2b2b")
+            button_frame.pack()
+
+            # Quit button
+            quit_btn = tk.Button(
+                button_frame,
+                text="Quit (Enter)",
+                command=self.quit,
+                bg="#d32f2f",
+                fg="#ffffff",
+                activebackground="#f44336",
+                activeforeground="#ffffff",
+                relief=tk.FLAT,
+                padx=20,
+                pady=8,
+                font=("sans-serif", 10, "bold")
+            )
+            quit_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+            # Cancel button
+            cancel_btn = tk.Button(
+                button_frame,
+                text="Cancel (Esc)",
+                command=self._cancel_quit,
+                bg="#404040",
+                fg="#e0e0e0",
+                activebackground="#505050",
+                activeforeground="#ffffff",
+                relief=tk.FLAT,
+                padx=20,
+                pady=8,
+                font=("sans-serif", 10)
+            )
+            cancel_btn.pack(side=tk.LEFT)
+
+            # Bind keyboard shortcuts to dialog window
+            self.quit_dialog.bind("<Return>", lambda e: self.quit())
+            self.quit_dialog.bind("<Escape>", lambda e: self._cancel_quit())
+            self.quit_dialog.bind("<Key-x>", lambda e: self.quit())  # Also allow x to quit from dialog
+            self.quit_dialog.bind("<Key-X>", lambda e: self.quit())
+            
+            # Ensure dialog is visible and gets focus
+            self.quit_dialog.deiconify()
+            self.quit_dialog.lift()
+            self.quit_dialog.focus_set()
+            
+            # Focus on cancel button initially (safer default)
+            cancel_btn.focus_set()
+            
+        except Exception as e:
+            # If dialog creation fails, just quit directly
+            print(f"Error creating quit dialog: {e}")
+            self.quit()
+
+    def _cancel_quit(self):
+        """Cancel quit and close dialog."""
+        if self.quit_dialog is not None:
+            try:
+                # Release grab first
+                self.quit_dialog.grab_release()
+            except:
+                pass
+            try:
+                # Destroy dialog
+                self.quit_dialog.destroy()
+            except:
+                pass
+            finally:
+                # Always reset reference and restore focus
+                self.quit_dialog = None
+                # Restore focus to main windows
+                try:
+                    self.audience_window.window.focus_set()
+                    self.presenter_window.window.focus_set()
+                except:
+                    pass
+
     def quit(self):
         """Clean up and exit."""
+        # Close dialog if open
+        if self.quit_dialog is not None:
+            try:
+                self.quit_dialog.grab_release()
+            except:
+                pass
+            try:
+                self.quit_dialog.destroy()
+            except:
+                pass
+            self.quit_dialog = None
+        
         try:
             self.doc.close()
         except:
