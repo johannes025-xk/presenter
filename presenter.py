@@ -34,6 +34,7 @@ For more information, visit: https://pymupdf.io/
 """
 
 import sys
+import signal
 import tkinter as tk
 from tkinter import messagebox
 from pathlib import Path
@@ -98,7 +99,7 @@ class PDFWindow:
         self.canvas = tk.Canvas(self.window, bg="black", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # Bind events
+        # Bind navigation events to the window
         self.window.bind("<Right>", lambda e: self.on_navigate("next"))
         self.window.bind("<space>", lambda e: self.on_navigate("next"))
         self.window.bind("<Next>", lambda e: self.on_navigate("next"))      # Page Down
@@ -109,20 +110,6 @@ class PDFWindow:
         self.window.bind("<F11>", lambda e: self.toggle_fullscreen())
         self.window.bind("<Escape>", lambda e: self.exit_fullscreen())
         self.window.bind("<Configure>", self.on_resize)
-
-        # Page number display with key bindings
-        self.window.bind("<Key>", self.on_key)
-        self.page_input = ""
-
-    def on_key(self, event):
-        """Handle number key input for direct page navigation."""
-        if event.char.isdigit():
-            self.page_input += event.char
-        elif event.keysym == "Return" and self.page_input:
-            self.on_navigate("goto", int(self.page_input))
-            self.page_input = ""
-        elif event.keysym not in ("Right", "Left", "space", "Home", "End", "F11", "Escape"):
-            self.page_input = ""
 
     def toggle_fullscreen(self):
         """Toggle fullscreen mode."""
@@ -232,15 +219,38 @@ class PDFPresenter:
         # Blank screen state
         self.is_blanked = False
 
-        # Bind 'b' key for blank screen on both windows
-        self.audience_window.window.bind("<b>", lambda e: self.toggle_blank())
-        self.audience_window.window.bind("<B>", lambda e: self.toggle_blank())
-        self.presenter_window.window.bind("<b>", lambda e: self.toggle_blank())
-        self.presenter_window.window.bind("<B>", lambda e: self.toggle_blank())
+        # Use bind_all on root to catch all key events regardless of focus
+        # This is more reliable than per-widget bindings
+        self.root.bind_all("<Key-b>", lambda e: self.toggle_blank())
+        self.root.bind_all("<Key-B>", lambda e: self.toggle_blank())
+        self.root.bind_all("<Key-h>", lambda e: self.show_help())
+        self.root.bind_all("<Key-H>", lambda e: self.show_help())
+        self.root.bind_all("<Key-x>", lambda e: self.quit())
+        self.root.bind_all("<Key-X>", lambda e: self.quit())
+        
+        # Slide jump: digit input and Return key
+        self.page_input = ""
+        for digit in "0123456789":
+            self.root.bind_all(f"<Key-{digit}>", self._on_digit)
+        self.root.bind_all("<Return>", self._on_return)
+        self.root.bind_all("<KP_Enter>", self._on_return)
 
-        # Bind 'h' key for help on presenter window only
-        self.presenter_window.window.bind("<h>", lambda e: self.show_help())
-        self.presenter_window.window.bind("<H>", lambda e: self.show_help())
+        # Handle Ctrl+C (SIGINT) to exit gracefully
+        # Use a more direct approach for immediate exit
+        def handle_sigint(signum, frame):
+            # Try to cleanup and exit immediately
+            try:
+                self.doc.close()
+            except:
+                pass
+            # Destroy windows and exit
+            try:
+                self.root.quit()
+                self.root.destroy()
+            except:
+                pass
+            sys.exit(0)
+        signal.signal(signal.SIGINT, handle_sigint)
 
         # Help window reference
         self.help_window = None
@@ -289,6 +299,22 @@ class PDFPresenter:
         
         return slides
 
+    def _on_digit(self, event):
+        """Handle digit key input for slide number entry."""
+        if event.char and event.char.isdigit():
+            self.page_input += event.char
+
+    def _on_return(self, event):
+        """Handle Return/Enter key to jump to entered slide number."""
+        if self.page_input:
+            try:
+                slide_num = int(self.page_input)
+                self.navigate("goto", slide_num)
+            except (ValueError, TypeError):
+                pass  # Invalid input, ignore
+            finally:
+                self.page_input = ""
+
     def toggle_blank(self):
         """Toggle blank screen for audience window."""
         self.is_blanked = not self.is_blanked
@@ -330,7 +356,9 @@ class PDFPresenter:
   OTHER
   ──────────────────────────────
   H               Show this help
+  X               Quit application
   Close window    Quit application
+  Ctrl+C          Quit application
 """
 
         # Create frame with padding
@@ -484,8 +512,13 @@ class PDFPresenter:
 
     def quit(self):
         """Clean up and exit."""
-        self.doc.close()
+        try:
+            self.doc.close()
+        except:
+            pass  # Ignore errors during cleanup
         self.root.quit()
+        self.root.destroy()
+        sys.exit(0)
 
     def run(self):
         """Start the application."""
@@ -501,15 +534,17 @@ class PDFPresenter:
             print(f"  ... and {len(self.slides) - 5} more slides")
         
         print("\nControls:")
-        print("  Right/Space/PgDn - Next slide")
-        print("  Left/PgUp        - Previous slide")
-        print("  Home             - First slide")
-        print("  End              - Last slide")
-        print("  B                - Blank/unblank audience screen")
-        print("  H                - Show help (presenter window)")
-        print("  F11              - Toggle fullscreen")
-        print("  Escape           - Exit fullscreen")
-        print("  Number+Enter     - Go to slide number")
+        print("  Right/Space/PgDn      - Next slide")
+        print("  Left/PgUp             - Previous slide")
+        print("  Home                  - First slide")
+        print("  End                   - Last slide")
+        print("  B                     - Blank/unblank audience screen")
+        print("  H                     - Show help (presenter window)")
+        print("  F11                   - Toggle fullscreen")
+        print("  Escape                - Exit fullscreen")
+        print("  Number+Enter          - Go to slide number")
+        print("  X                     - Quit application")
+        print("  Ctrl+C (in terminal)  - Quit application")
         print("\nDrag 'Audience View' to projector, press F11 for fullscreen.")
 
         self.root.mainloop()
