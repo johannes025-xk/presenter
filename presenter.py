@@ -141,14 +141,14 @@ class PDFWindow:
             self.window.after_cancel(self.pending_resize)
         self.pending_resize = self.window.after(100, lambda: self.on_navigate("refresh"))
 
-    def display_page(self, pixmap):
+    def display_page(self, pixmap, no_page_message="No page available"):
         """Display a rendered PDF page (as PyMuPDF Pixmap)."""
         if pixmap is None:
             self.canvas.delete("all")
             self.canvas.create_text(
                 self.canvas.winfo_width() // 2,
                 self.canvas.winfo_height() // 2,
-                text="No page available",
+                text=no_page_message,
                 fill="white",
                 font=("sans-serif", 24)
             )
@@ -208,6 +208,7 @@ class PDFPresenter:
         self.slides = self._build_slide_mapping(audience_pages)
         self.num_slides = len(self.slides)
         self.current_slide = 0  # 0-indexed
+        self.current_notes_index = 0  # 0-indexed index into presenter_pages for current slide
 
         if self.total_pages < 2:
             print("Warning: PDF has less than 2 pages. Presenter notes will be empty.")
@@ -374,19 +375,40 @@ class PDFPresenter:
         if action != "refresh":
             self.is_blanked = False
 
-        if action == "next" and self.current_slide < self.num_slides - 1:
-            self.current_slide += 1
-        elif action == "prev" and self.current_slide > 0:
-            self.current_slide -= 1
+        if action == "next":
+            # Get current slide's presenter pages
+            _, presenter_pages = self.slides[self.current_slide]
+            # If there are notes and we haven't reached the last one, advance notes index
+            if presenter_pages and self.current_notes_index < len(presenter_pages) - 1:
+                self.current_notes_index += 1
+            # Otherwise, advance to next slide
+            elif self.current_slide < self.num_slides - 1:
+                self.current_slide += 1
+                self.current_notes_index = 0
+        elif action == "prev":
+            # If we're not at the first notes page, go back in notes
+            if self.current_notes_index > 0:
+                self.current_notes_index -= 1
+            # Otherwise, go to previous slide
+            elif self.current_slide > 0:
+                self.current_slide -= 1
+                # Set notes index to last notes page of previous slide (or 0 if no notes)
+                _, presenter_pages = self.slides[self.current_slide]
+                self.current_notes_index = len(presenter_pages) - 1 if presenter_pages else 0
         elif action == "first":
             self.current_slide = 0
+            self.current_notes_index = 0
         elif action == "last":
             self.current_slide = self.num_slides - 1
+            # Set notes index to last notes page of last slide (or 0 if no notes)
+            _, presenter_pages = self.slides[self.current_slide]
+            self.current_notes_index = len(presenter_pages) - 1 if presenter_pages else 0
         elif action == "goto" and value is not None:
             # User inputs 1-indexed slide number
             target = value - 1
             if 0 <= target < self.num_slides:
                 self.current_slide = target
+                self.current_notes_index = 0
         elif action == "refresh":
             pass  # Just redraw
 
@@ -417,6 +439,12 @@ class PDFPresenter:
         # Get page mapping for current slide
         audience_page, presenter_pages = self.slides[self.current_slide]
 
+        # Ensure current_notes_index is valid
+        if presenter_pages:
+            self.current_notes_index = min(self.current_notes_index, len(presenter_pages) - 1)
+        else:
+            self.current_notes_index = 0
+
         # Render and display audience page
         aw = self.audience_window.canvas.winfo_width()
         ah = self.audience_window.canvas.winfo_height()
@@ -429,21 +457,27 @@ class PDFPresenter:
                 audience_pixmap = self.render_page(audience_page, aw, ah)
                 self.audience_window.display_page(audience_pixmap)
 
-        # Render and display first presenter page (always visible, even when blanked)
-        # If multiple presenter pages exist, show the first one
+        # Render and display presenter page based on current notes index
         pw = self.presenter_window.canvas.winfo_width()
         ph = self.presenter_window.canvas.winfo_height()
         if pw > 10 and ph > 10:
-            presenter_page = presenter_pages[0] if presenter_pages else None
-            if presenter_page is not None:
+            if presenter_pages:
+                # Show the notes page at current index
+                presenter_page = presenter_pages[self.current_notes_index]
                 presenter_pixmap = self.render_page(presenter_page, pw, ph)
                 self.presenter_window.display_page(presenter_pixmap)
             else:
-                self.presenter_window.display_page(None)
+                # No notes available - show black screen with message
+                self.presenter_window.display_page(None, "No related notes available")
 
         # Update window titles
         slide_info = f"Slide {self.current_slide + 1}/{self.num_slides}"
-        notes_info = f" ({len(presenter_pages)} notes)" if len(presenter_pages) > 1 else ""
+        notes_info = ""
+        if presenter_pages:
+            if len(presenter_pages) > 1:
+                notes_info = f" (Notes {self.current_notes_index + 1}/{len(presenter_pages)})"
+            else:
+                notes_info = " (1 note)"
         blank_indicator = " [BLANKED]" if self.is_blanked else ""
         self.audience_window.set_title(f"Audience View - {slide_info}{blank_indicator}")
         self.presenter_window.set_title(f"Presenter Notes - {slide_info}{notes_info}{blank_indicator}")
