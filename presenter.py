@@ -213,8 +213,39 @@ class PDFPresenter:
         # Blank screen state
         self.is_blanked = False
 
-        # Bind keys to both windows and canvases for reliability
+        # Bind keys globally using bind_all for USB presenter support
+        # This ensures events are captured even when widgets don't have focus
         # Navigation keys
+        self.root.bind_all("<Right>", lambda e: self.navigate("next"))
+        self.root.bind_all("<Left>", lambda e: self.navigate("prev"))
+        self.root.bind_all("<Up>", lambda e: self.navigate("prev"))  # Up arrow for previous
+        self.root.bind_all("<Down>", lambda e: self.navigate("next"))  # Down arrow for next
+        self.root.bind_all("<space>", lambda e: self.navigate("next"))
+        self.root.bind_all("<Next>", lambda e: self.navigate("next"))  # Page Down
+        self.root.bind_all("<Prior>", lambda e: self.navigate("prev"))  # Page Up
+        self.root.bind_all("<Home>", lambda e: self.navigate("first"))
+        self.root.bind_all("<End>", lambda e: self.navigate("last"))
+        # F5/F6 are commonly used by USB presenters
+        self.root.bind_all("<F5>", lambda e: self.navigate("next"))
+        self.root.bind_all("<F6>", lambda e: self.navigate("prev"))
+        self.root.bind_all("<F11>", lambda e: self.audience_window.toggle_fullscreen())
+        self.root.bind_all("<Escape>", lambda e: self.audience_window.exit_fullscreen())
+        
+        # Letter keys
+        self.root.bind_all("<Key-b>", lambda e: self.toggle_blank())
+        self.root.bind_all("<Key-B>", lambda e: self.toggle_blank())
+        self.root.bind_all("<Key-h>", lambda e: self.show_help())
+        self.root.bind_all("<Key-H>", lambda e: self.show_help())
+        self.root.bind_all("<Key-x>", lambda e: self.confirm_quit())
+        self.root.bind_all("<Key-X>", lambda e: self.confirm_quit())
+        
+        # Slide jump: digit input and Return key
+        for digit in "0123456789":
+            self.root.bind_all(f"<Key-{digit}>", self._on_digit)
+        self.root.bind_all("<Return>", self._on_return)
+        self.root.bind_all("<KP_Enter>", self._on_return)
+        
+        # Also bind to individual widgets for backward compatibility
         widgets_to_bind = [
             self.audience_window.window, self.audience_window.canvas,
             self.presenter_window.window, self.presenter_window.canvas
@@ -223,11 +254,15 @@ class PDFPresenter:
         for widget in widgets_to_bind:
             widget.bind("<Right>", lambda e: self.navigate("next"))
             widget.bind("<Left>", lambda e: self.navigate("prev"))
+            widget.bind("<Up>", lambda e: self.navigate("prev"))  # Up arrow for previous
+            widget.bind("<Down>", lambda e: self.navigate("next"))  # Down arrow for next
             widget.bind("<space>", lambda e: self.navigate("next"))
             widget.bind("<Next>", lambda e: self.navigate("next"))  # Page Down
             widget.bind("<Prior>", lambda e: self.navigate("prev"))  # Page Up
             widget.bind("<Home>", lambda e: self.navigate("first"))
             widget.bind("<End>", lambda e: self.navigate("last"))
+            widget.bind("<F5>", lambda e: self.navigate("next"))
+            widget.bind("<F6>", lambda e: self.navigate("prev"))
             widget.bind("<F11>", lambda e: self.audience_window.toggle_fullscreen())
             widget.bind("<Escape>", lambda e: self.audience_window.exit_fullscreen())
             
@@ -361,8 +396,8 @@ class PDFPresenter:
         help_text = """
   NAVIGATION
   ──────────────────────────────
-  →  / Space / PgDn   Next slide
-  ←  / PgUp           Previous slide
+  →  / ↓  / Space / PgDn / F5   Next slide
+  ←  / ↑  / PgUp / F6           Previous slide
   Home                First slide
   End                 Last slide
   Number + Enter      Jump to slide
@@ -692,10 +727,10 @@ class PDFPresenter:
             print(f"  ... and {len(self.slides) - 5} more slides")
         
         print("\nControls:")
-        print("  Right/Space/PgDn      - Next slide")
-        print("  Left/PgUp             - Previous slide")
-        print("  Home                  - First slide")
-        print("  End                   - Last slide")
+        print("  Right/Down/Space/PgDn/F5   - Next slide")
+        print("  Left/Up/PgUp/F6            - Previous slide")
+        print("  Home                      - First slide")
+        print("  End                       - Last slide")
         print("  B                     - Blank/unblank audience screen")
         print("  H                     - Show help (presenter window)")
         print("  F11                   - Toggle fullscreen")
