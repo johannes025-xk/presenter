@@ -245,43 +245,15 @@ class PDFPresenter:
         self.root.bind_all("<Return>", self._on_return)
         self.root.bind_all("<KP_Enter>", self._on_return)
         
-        # Also bind to individual widgets for backward compatibility
-        widgets_to_bind = [
-            self.audience_window.window, self.audience_window.canvas,
-            self.presenter_window.window, self.presenter_window.canvas
-        ]
-        
-        for widget in widgets_to_bind:
-            widget.bind("<Right>", lambda e: self.navigate("next"))
-            widget.bind("<Left>", lambda e: self.navigate("prev"))
-            widget.bind("<Up>", lambda e: self.navigate("prev"))  # Up arrow for previous
-            widget.bind("<Down>", lambda e: self.navigate("next"))  # Down arrow for next
-            widget.bind("<space>", lambda e: self.navigate("next"))
-            widget.bind("<Next>", lambda e: self.navigate("next"))  # Page Down
-            widget.bind("<Prior>", lambda e: self.navigate("prev"))  # Page Up
-            widget.bind("<Home>", lambda e: self.navigate("first"))
-            widget.bind("<End>", lambda e: self.navigate("last"))
-            widget.bind("<F5>", lambda e: self.navigate("next"))
-            widget.bind("<F6>", lambda e: self.navigate("prev"))
-            widget.bind("<F11>", lambda e: self.audience_window.toggle_fullscreen())
-            widget.bind("<Escape>", lambda e: self.audience_window.exit_fullscreen())
-            
-            # Letter keys
-            widget.bind("<Key-b>", lambda e: self.toggle_blank())
-            widget.bind("<Key-B>", lambda e: self.toggle_blank())
-            widget.bind("<Key-h>", lambda e: self.show_help())
-            widget.bind("<Key-H>", lambda e: self.show_help())
-            widget.bind("<Key-x>", lambda e: self.confirm_quit())
-            widget.bind("<Key-X>", lambda e: self.confirm_quit())
-            
-            # Slide jump: digit input and Return key
-            for digit in "0123456789":
-                widget.bind(f"<Key-{digit}>", self._on_digit)
-            widget.bind("<Return>", self._on_return)
-            widget.bind("<KP_Enter>", self._on_return)
+        # Note: We only use bind_all now to avoid double-triggering from both
+        # bind_all and widget-specific bindings. bind_all captures events globally
+        # regardless of focus, so widget-specific bindings are not needed.
         
         # Slide jump buffer
         self.page_input = ""
+        
+        # Navigation debounce to prevent double-triggering from bind_all + widget bindings
+        self._navigation_in_progress = False
         
         # Ensure windows can receive focus
         self.audience_window.window.focus_set()
@@ -351,6 +323,19 @@ class PDFPresenter:
             
             presenter_pages = list(range(audience_page + 1, next_audience))
             slides.append((audience_page, presenter_pages))
+        
+        # Debug: Print slide mapping details (only if consecutive pages detected)
+        # Check if all pages are consecutive (potential issue case)
+        if len(audience_pages_0idx) > 1:
+            is_consecutive = all(audience_pages_0idx[i] + 1 == audience_pages_0idx[i+1] 
+                               for i in range(len(audience_pages_0idx) - 1))
+            if is_consecutive:
+                print(f"\n[DEBUG] Consecutive audience pages detected: {len(slides)} slides created")
+                print(f"[DEBUG] First 3 slides: ", end="")
+                for idx in range(min(3, len(slides))):
+                    aud_page, pres_pages = slides[idx]
+                    print(f"Slide {idx+1}->page {aud_page+1} ", end="")
+                print()
         
         return slides
 
@@ -454,48 +439,73 @@ class PDFPresenter:
 
     def navigate(self, action, value=None):
         """Handle navigation commands."""
-        # Any navigation unblocks the screen
-        if action != "refresh":
-            self.is_blanked = False
+        # Prevent double-triggering from bind_all + widget bindings
+        if self._navigation_in_progress and action != "refresh":
+            return
+        self._navigation_in_progress = True
+        
+        try:
+            # Any navigation unblocks the screen
+            if action != "refresh":
+                self.is_blanked = False
 
-        if action == "next":
-            # Get current slide's presenter pages
-            _, presenter_pages = self.slides[self.current_slide]
-            # If there are notes and we haven't reached the last one, advance notes index
-            if presenter_pages and self.current_notes_index < len(presenter_pages) - 1:
-                self.current_notes_index += 1
-            # Otherwise, advance to next slide
-            elif self.current_slide < self.num_slides - 1:
-                self.current_slide += 1
+            old_slide = self.current_slide
+            old_notes_index = self.current_notes_index
+
+            if action == "next":
+                # Get current slide's presenter pages
+                _, presenter_pages = self.slides[self.current_slide]
+                # If there are notes and we haven't reached the last one, advance notes index
+                if presenter_pages and self.current_notes_index < len(presenter_pages) - 1:
+                    self.current_notes_index += 1
+                # Otherwise, advance to next slide
+                elif self.current_slide < self.num_slides - 1:
+                    self.current_slide += 1
+                    self.current_notes_index = 0
+            elif action == "prev":
+                # If we're not at the first notes page, go back in notes
+                if self.current_notes_index > 0:
+                    self.current_notes_index -= 1
+                # Otherwise, go to previous slide
+                elif self.current_slide > 0:
+                    self.current_slide -= 1
+                    # Set notes index to last notes page of previous slide (or 0 if no notes)
+                    _, presenter_pages = self.slides[self.current_slide]
+                    self.current_notes_index = len(presenter_pages) - 1 if presenter_pages else 0
+            elif action == "first":
+                self.current_slide = 0
                 self.current_notes_index = 0
-        elif action == "prev":
-            # If we're not at the first notes page, go back in notes
-            if self.current_notes_index > 0:
-                self.current_notes_index -= 1
-            # Otherwise, go to previous slide
-            elif self.current_slide > 0:
-                self.current_slide -= 1
-                # Set notes index to last notes page of previous slide (or 0 if no notes)
+            elif action == "last":
+                self.current_slide = self.num_slides - 1
+                # Set notes index to last notes page of last slide (or 0 if no notes)
                 _, presenter_pages = self.slides[self.current_slide]
                 self.current_notes_index = len(presenter_pages) - 1 if presenter_pages else 0
-        elif action == "first":
-            self.current_slide = 0
-            self.current_notes_index = 0
-        elif action == "last":
-            self.current_slide = self.num_slides - 1
-            # Set notes index to last notes page of last slide (or 0 if no notes)
-            _, presenter_pages = self.slides[self.current_slide]
-            self.current_notes_index = len(presenter_pages) - 1 if presenter_pages else 0
-        elif action == "goto" and value is not None:
-            # User inputs 1-indexed slide number
-            target = value - 1
-            if 0 <= target < self.num_slides:
-                self.current_slide = target
-                self.current_notes_index = 0
-        elif action == "refresh":
-            pass  # Just redraw
+            elif action == "goto" and value is not None:
+                # User inputs 1-indexed slide number
+                target = value - 1
+                if 0 <= target < self.num_slides:
+                    self.current_slide = target
+                    self.current_notes_index = 0
+            elif action == "refresh":
+                pass  # Just redraw
 
-        self.update_display()
+            # Debug logging for navigation (only log when slide changes, and only for first few navigations)
+            if (old_slide != self.current_slide or old_notes_index != self.current_notes_index) and not hasattr(self, '_nav_debug_count'):
+                self._nav_debug_count = 0
+            if (old_slide != self.current_slide or old_notes_index != self.current_notes_index) and hasattr(self, '_nav_debug_count'):
+                if self._nav_debug_count < 5:  # Only log first 5 navigation events
+                    audience_page, presenter_pages = self.slides[self.current_slide]
+                    print(f"[DEBUG] Navigate {action}: slide {old_slide}->{self.current_slide}, "
+                          f"showing audience page {audience_page+1}")
+                    self._nav_debug_count += 1
+
+            self.update_display()
+        finally:
+            # Reset navigation flag after a short delay to allow for rapid navigation
+            if action != "refresh":
+                self.root.after(50, lambda: setattr(self, '_navigation_in_progress', False))
+            else:
+                self._navigation_in_progress = False
 
     def render_page(self, page_num, canvas_width, canvas_height):
         """Render a PDF page scaled to fit the canvas."""
@@ -531,6 +541,16 @@ class PDFPresenter:
         # Render and display audience page
         aw = self.audience_window.canvas.winfo_width()
         ah = self.audience_window.canvas.winfo_height()
+        
+        # Debug: Log what's being displayed (more verbose for consecutive pages case)
+        if not hasattr(self, '_display_debug_count'):
+            self._display_debug_count = 0
+        # Log more times if we have consecutive pages (potential issue case)
+        max_logs = 10 if not presenter_pages else 3
+        if self._display_debug_count < max_logs:
+            print(f"[DEBUG] Display: slide {self.current_slide}, audience page {audience_page+1}, "
+                  f"canvas size {aw}x{ah}, blanked={self.is_blanked}")
+            self._display_debug_count += 1
         if aw > 10 and ah > 10:
             if self.is_blanked:
                 # Show black screen
@@ -720,11 +740,9 @@ class PDFPresenter:
         
         # Show slide mapping summary
         print("\nSlide mapping:")
-        for i, (aud_page, pres_pages) in enumerate(self.slides[:5]):  # Show first 5
+        for i, (aud_page, pres_pages) in enumerate(self.slides):
             pres_str = f"notes: {[p+1 for p in pres_pages]}" if pres_pages else "no notes"
             print(f"  Slide {i+1}: page {aud_page+1} ({pres_str})")
-        if len(self.slides) > 5:
-            print(f"  ... and {len(self.slides) - 5} more slides")
         
         print("\nControls:")
         print("  Right/Down/Space/PgDn/F5   - Next slide")
